@@ -1,0 +1,167 @@
+---
+sidebar_position: 2.5
+---
+
+# Single Sign-On (OpenID Connect)
+
+OpenInvento can delegate login to an OpenID Connect (OIDC) provider such as [Pocket ID](https://pocket-id.org/), Keycloak, Authentik, Authelia, or any other standards-compliant identity provider. Users then sign in with the account they already have at the provider instead of a separate OpenInvento password.
+
+Single sign-on is **disabled by default** and works next to the regular password login. Optionally, password login can be disabled for everyone except one or more break-glass accounts.
+
+---
+
+## How It Works
+
+- OpenInvento uses the **Authorization Code flow with PKCE** ([RFC 7636](https://datatracker.ietf.org/doc/html/rfc7636), as recommended by the OAuth 2.0 Security Best Current Practice, [RFC 9700](https://datatracker.ietf.org/doc/html/rfc9700)). This works for both confidential clients (with a client secret) and public clients (PKCE only).
+- The provider endpoints are read from `OIDC_ISSUER/.well-known/openid-configuration` ([OpenID Connect Discovery](https://openid.net/specs/openid-connect-discovery-1_0.html)) and cached for one hour. They can also be set explicitly.
+- The ID token is verified: signature (via the provider's JWKS), issuer, audience, `azp`, expiry and nonce.
+- Users are identified by the **issuer and subject (`sub`)** of their provider account, as required by [OpenID Connect Core](https://openid.net/specs/openid-connect-core-1_0.html#ClaimStability). The email address is never used to identify a returning user, because it can change or be reassigned at the provider.
+- After a successful login, OpenInvento creates a normal Django session. API keys keep working as before.
+
+---
+
+## 1. Register OpenInvento at Your Provider
+
+Create a new OIDC client (sometimes called "application" or "relying party") at your provider with these settings:
+
+| Setting | Value |
+| :--- | :--- |
+| Redirect / callback URI | `https://inventory.example.com/api/oidc/callback/` (your `APP_URL` followed by `/api/oidc/callback/`, including the trailing slash) |
+| Grant type | Authorization Code |
+| PKCE | Enabled (`S256`) |
+| Scopes | `openid profile email` |
+| Client type | Confidential (with client secret) or public (no secret) |
+
+Note the **client ID**, the **client secret** (confidential clients only) and the **issuer URL**. The issuer is the base URL that the provider's discovery document lists as `issuer`, for example `https://id.example.com` for Pocket ID or `https://sso.example.com/realms/home` for Keycloak.
+
+:::tip Pocket ID
+In Pocket ID, go to **Administration** &rarr; **OIDC Clients** &rarr; **Add OIDC Client**, enter the callback URL above and keep **PKCE** enabled. Mark the client as **Public Client** if you do not want to use a client secret. The issuer is your Pocket ID URL (`APP_URL` of Pocket ID).
+:::
+
+---
+
+## 2. Configure OpenInvento
+
+Add the following environment variables to your `.env` file or Docker Compose configuration:
+
+```bash
+APP_URL=https://inventory.example.com
+OIDC_ENABLED=true
+OIDC_ISSUER=https://id.example.com
+OIDC_CLIENT_ID=your-client-id
+OIDC_CLIENT_SECRET=your-client-secret   # leave empty for a public client
+OIDC_BUTTON_LABEL=Pocket ID             # optional: "Sign in with Pocket ID"
+```
+
+Restart the container. The login page now shows a **Sign in with …** button.
+
+:::warning APP_URL is required
+The redirect URI is built from `APP_URL`, so it stays correct behind a reverse proxy that terminates TLS. If only `APP_URLS` is set, the redirect URI is derived from the incoming request, which is usually `http://` behind a proxy and is then rejected by the provider.
+:::
+
+### Environment Variables
+
+| Variable | Required | Default | Description |
+| :--- | :---: | :---: | :--- |
+| `OIDC_ENABLED` | No | `false` | Enables login via OpenID Connect. Requires `OIDC_ISSUER` and `OIDC_CLIENT_ID`. |
+| `OIDC_ISSUER` | If enabled | `None` | Issuer URL of the provider. Must match the `issuer` in the discovery document and the `iss` claim of ID tokens exactly (including or excluding a trailing slash). |
+| `OIDC_CLIENT_ID` | If enabled | `None` | Client ID registered at the provider. |
+| `OIDC_CLIENT_SECRET` | No | empty | Client secret. Leave empty for public clients, which authenticate with PKCE only. |
+| `OIDC_SCOPES` | No | `openid profile email` | Space-separated scopes requested from the provider. |
+| `OIDC_USERNAME_CLAIM` | No | `preferred_username` | Claim used as username when an account is created. Falls back to the local part of the email address. |
+| `OIDC_NAME_CLAIM` | No | `name` | Claim used as display name. |
+| `OIDC_EMAIL_CLAIM` | No | `email` | Claim used as email address. |
+| `OIDC_CREATE_USERS` | No | `true` | Creates an OpenInvento account on the first login of a new user. When `false`, only accounts that are already linked can log in. |
+| `OIDC_LINK_EXISTING_BY_EMAIL` | No | `false` | Links the first OIDC login to an existing, not yet linked account with the same email address, but only if the provider marks the address as verified (`email_verified`). See the security note below. |
+| `OIDC_AUTO_REDIRECT` | No | `false` | Skips the login page and redirects straight to the provider. |
+| `OIDC_BUTTON_LABEL` | No | empty | Provider name shown on the login button ("Sign in with *label*"). Without it, the button reads "Sign in with single sign-on". |
+| `OIDC_SIGN_ALGO` | No | `RS256` | Signing algorithm of the ID tokens. |
+| `OIDC_TIMEOUT` | No | `10` | Timeout in seconds for requests to the provider. |
+| `OIDC_AUTHORIZATION_ENDPOINT` | No | discovered | Overrides the authorization endpoint from the discovery document. |
+| `OIDC_TOKEN_ENDPOINT` | No | discovered | Overrides the token endpoint. |
+| `OIDC_USERINFO_ENDPOINT` | No | discovered | Overrides the userinfo endpoint. |
+| `OIDC_JWKS_ENDPOINT` | No | discovered | Overrides the JWKS endpoint. If all four endpoints are set, the discovery document is not fetched at all. |
+| `DISABLE_LOCAL_LOGIN` | No | `false` | Disables password login and public signup for all accounts except `LOCAL_LOGIN_USERS`. |
+| `LOCAL_LOGIN_USERS` | No | `INIT_ADMIN_USERNAME` | Comma-separated usernames that keep password login when `DISABLE_LOCAL_LOGIN` is enabled (break-glass accounts). |
+
+---
+
+## Accounts Created by Single Sign-On
+
+On the first login of a provider account, OpenInvento:
+
+1. Creates a user with the username from `OIDC_USERNAME_CLAIM`. Characters that are not allowed in usernames are replaced by `_`. If the username is already taken by another account, a suffix is added (`alice_2`); the existing account is **never** taken over.
+2. Sets the display name and email address from the provider.
+3. Creates a personal inventory for the user, just like a regular signup.
+4. Links the account to the provider identity (issuer + subject).
+
+On every following login, the **display name and email address** are updated from the provider. The username is only set once and can be changed by the user afterwards. If the email address from the provider is already used by another OpenInvento account, it is not copied (the conflict is logged).
+
+Accounts created by single sign-on have **no local password**. The password fields in **Settings** &rarr; **Personal account** are replaced by a notice, and the API rejects setting a password for these accounts. Accounts are never made instance administrators by the provider; an existing administrator can promote them in **Instance Settings** &rarr; **Users**.
+
+:::danger Linking existing accounts by email
+`OIDC_LINK_EXISTING_BY_EMAIL=true` lets whoever controls an email address at the provider take over the OpenInvento account with that address. Only enable it if your provider verifies email addresses and users cannot change them freely, for example to migrate existing local accounts once. Linking only happens if the provider sends `email_verified: true` and the account is not linked yet.
+:::
+
+---
+
+## Disabling Password Login (Break-Glass Accounts)
+
+To make the provider the only way to log in, set:
+
+```bash
+DISABLE_LOCAL_LOGIN=true
+LOCAL_LOGIN_USERS=admin        # defaults to INIT_ADMIN_USERNAME
+```
+
+- The login page only shows the single sign-on button.
+- Password login returns `403 Local login is disabled for this instance` for everyone except `LOCAL_LOGIN_USERS`, regardless of whether the password was correct.
+- Public signup is disabled, even if `ENABLE_SIGNUP=true`.
+- The break-glass accounts keep their password, so the instance stays reachable if the provider is down or misconfigured. Open **`/auth/login?local=1`** to show the password form.
+- While `DISABLE_LOCAL_LOGIN` is enabled, accounts listed in `LOCAL_LOGIN_USERS` cannot be renamed, and no other account can be renamed to one of these names. When you log in with the initial administrator for the first time, keep its username in the **Update your credentials** form.
+
+:::tip
+Use a long, random password for break-glass accounts and store it in a password manager. They bypass the multi-factor authentication of your provider.
+:::
+
+---
+
+## Automatic Redirect
+
+With `OIDC_AUTO_REDIRECT=true`, visiting the login page redirects straight to the provider, so users do not see the OpenInvento login page at all. The redirect is skipped:
+
+- after a failed single sign-on (`/auth/login?error=sso`), to avoid a redirect loop,
+- on `/auth/login?local=1`, which always shows the password form for break-glass accounts.
+
+---
+
+## Logout
+
+Logging out of OpenInvento ends the **OpenInvento session only**. The session at the provider stays active, so clicking **Sign in with …** again usually logs the user back in without asking for credentials. On shared devices, also log out at the provider.
+
+Single logout (RP-initiated logout at the provider's `end_session_endpoint`, front- or back-channel logout) is not supported yet.
+
+---
+
+## Limitations
+
+- **Access is checked at login only.** Disabling or deleting a user at the provider takes effect at their next login. Existing sessions (Django default: two weeks) and API keys keep working until then. To revoke access immediately, delete the user in **Instance Settings** &rarr; **Users** or revoke their API keys. Real-time deprovisioning would require SCIM, which is out of scope.
+- **One provider per instance.**
+- **No group or role mapping yet.** Mapping provider groups to inventory memberships and administrator rights is planned as a follow-up.
+
+---
+
+## Troubleshooting
+
+If the login page shows **"Single sign-on failed"**, the container log contains the reason in a line starting with `OIDC login failed:`, `OIDC provider discovery failed:` or (for rejected ID token claims) `failed to get or create user:`. Common causes:
+
+| Log message / symptom | Cause and fix |
+| :--- | :--- |
+| Provider shows "invalid redirect URI" | The callback URI registered at the provider does not match `APP_URL` + `/api/oidc/callback/` exactly (scheme, port, trailing slash). |
+| `Discovery document issuer … does not match OIDC_ISSUER` | `OIDC_ISSUER` differs from the issuer the provider announces, often only by a trailing slash. Copy the `issuer` value from `/.well-known/openid-configuration`. |
+| `ID token issuer does not match OIDC_ISSUER` | Same as above, or the provider is reached under a different URL than it announces. |
+| `ID token audience does not contain the client ID` | `OIDC_CLIENT_ID` does not match the client at the provider. |
+| `Get Token Error … invalid_client` | Wrong client secret, or a public client is configured with a secret (or vice versa). |
+| `Signature has expired` | The clocks of the OpenInvento host and the provider differ. Enable NTP on both hosts. |
+| `OIDC login rejected: no account …` | `OIDC_CREATE_USERS=false` and the provider account is not linked to an OpenInvento account. |
+| Email address stays empty | Another OpenInvento account already uses this address. |
