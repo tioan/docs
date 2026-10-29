@@ -6,6 +6,8 @@ sidebar_position: 2.5
 
 OpenInvento can delegate login to an OpenID Connect (OIDC) provider such as [Pocket ID](https://pocket-id.org/), Keycloak, Authentik, Authelia, or any other standards-compliant identity provider. Users then sign in with the account they already have at the provider instead of a separate OpenInvento password.
 
+The [security notes](../security/oidc-security) list every OpenID Connect requirement with how it is handled and verified.
+
 Single sign-on is **disabled by default** and works next to the regular password login. Optionally, password login can be disabled for everyone except one or more break-glass accounts.
 
 ---
@@ -14,7 +16,10 @@ Single sign-on is **disabled by default** and works next to the regular password
 
 - OpenInvento uses the **Authorization Code flow with PKCE** ([RFC 7636](https://datatracker.ietf.org/doc/html/rfc7636), as recommended by the OAuth 2.0 Security Best Current Practice, [RFC 9700](https://datatracker.ietf.org/doc/html/rfc9700)). This works for both confidential clients (with a client secret) and public clients (PKCE only).
 - The provider endpoints are read from `OIDC_ISSUER/.well-known/openid-configuration` ([OpenID Connect Discovery](https://openid.net/specs/openid-connect-discovery-1_0.html)) and cached for one hour. They can also be set explicitly.
-- The ID token is verified: signature (via the provider's JWKS), issuer, audience, `azp`, expiry and nonce.
+- The ID token is validated as described in [OpenID Connect Core, section 3.1.3.7](https://openid.net/specs/openid-connect-core-1_0.html#IDTokenValidation): signature (via the provider's JWKS, only with the configured algorithm), issuer, audience, `azp`, expiry, issue time and nonce. Clock differences of up to 60 seconds to the provider are tolerated.
+- All provider URLs (issuer, discovery and endpoints) must use **https** ([OpenID Connect Core, section 16.17](https://openid.net/specs/openid-connect-core-1_0.html#TLSRequirements)). Plain `http://` is only accepted for `localhost`/`127.0.0.1`/`::1`, or when `OIDC_ALLOW_INSECURE_HTTP=true` is set for tests.
+- If the provider sends the `iss` parameter in its redirect ([RFC 9207](https://datatracker.ietf.org/doc/html/rfc9207)), it must match `OIDC_ISSUER`. If the provider announces support for it, it is required.
+- A started login is valid for 10 minutes. The scope `openid` is always requested, even if `OIDC_SCOPES` does not contain it.
 - Users are identified by the **issuer and subject (`sub`)** of their provider account, as required by [OpenID Connect Core](https://openid.net/specs/openid-connect-core-1_0.html#ClaimStability). The email address is never used to identify a returning user, because it can change or be reassigned at the provider.
 - After a successful login, OpenInvento creates a normal Django session. API keys keep working as before.
 
@@ -67,7 +72,7 @@ The redirect URI is built from `APP_URL`, so it stays correct behind a reverse p
 | `OIDC_ISSUER` | If enabled | `None` | Issuer URL of the provider. Must match the `issuer` in the discovery document and the `iss` claim of ID tokens exactly (including or excluding a trailing slash). |
 | `OIDC_CLIENT_ID` | If enabled | `None` | Client ID registered at the provider. |
 | `OIDC_CLIENT_SECRET` | No | empty | Client secret. Leave empty for public clients, which authenticate with PKCE only. |
-| `OIDC_SCOPES` | No | `openid profile email` | Space-separated scopes requested from the provider. |
+| `OIDC_SCOPES` | No | `openid profile email` | Space-separated scopes requested from the provider. `openid` is always added. |
 | `OIDC_USERNAME_CLAIM` | No | `preferred_username` | Claim used as username when an account is created. Falls back to the local part of the email address. |
 | `OIDC_NAME_CLAIM` | No | `name` | Claim used as display name. |
 | `OIDC_EMAIL_CLAIM` | No | `email` | Claim used as email address. |
@@ -75,8 +80,10 @@ The redirect URI is built from `APP_URL`, so it stays correct behind a reverse p
 | `OIDC_LINK_EXISTING_BY_EMAIL` | No | `false` | Links the first OIDC login to an existing, not yet linked account with the same email address, but only if the provider marks the address as verified (`email_verified`). See the security note below. |
 | `OIDC_AUTO_REDIRECT` | No | `false` | Skips the login page and redirects straight to the provider. |
 | `OIDC_BUTTON_LABEL` | No | empty | Provider name shown on the login button ("Sign in with *label*"). Without it, the button reads "Sign in with single sign-on". |
-| `OIDC_SIGN_ALGO` | No | `RS256` | Signing algorithm of the ID tokens. |
+| `OIDC_SIGN_ALGO` | No | `RS256` | Signing algorithm of the ID tokens: `RS256`, `RS384`, `RS512`, `ES256`, `ES384`, `ES512`, or `HS256`/`HS384`/`HS512` with a client secret of at least 32 characters. Any other value (e.g. `PS256`, `EdDSA`, `none`) disables OIDC login and logs an error at startup. |
+| `OIDC_TOKEN_USE_BASIC_AUTH` | No | `false` | Sends the client secret as HTTP Basic authentication (`client_secret_basic`) instead of in the request body (`client_secret_post`). |
 | `OIDC_TIMEOUT` | No | `10` | Timeout in seconds for requests to the provider. |
+| `OIDC_ALLOW_INSECURE_HTTP` | No | `false` | Accepts `http://` provider URLs on hosts other than loopback. Only for test setups: over plain http, anyone on the network can replace the provider's keys and tokens. |
 | `OIDC_AUTHORIZATION_ENDPOINT` | No | discovered | Overrides the authorization endpoint from the discovery document. |
 | `OIDC_TOKEN_ENDPOINT` | No | discovered | Overrides the token endpoint. |
 | `OIDC_USERINFO_ENDPOINT` | No | discovered | Overrides the userinfo endpoint. |
@@ -97,11 +104,21 @@ On the first login of a provider account, OpenInvento:
 
 On every following login, the **display name and email address** are updated from the provider. The username is only set once and can be changed by the user afterwards. If the email address from the provider is already used by another OpenInvento account, it is not copied (the conflict is logged).
 
+The email address is not stored if the provider explicitly marks it as unverified (`email_verified: false`), so nobody can claim someone else's address through a provider account. If the provider does not send `email_verified` at all, the address is stored: some providers, for example Microsoft Entra ID, never send this claim. Linking existing accounts by email (below) always requires `email_verified: true`.
+
 Accounts created by single sign-on have **no local password**. The password fields in **Settings** &rarr; **Personal account** are replaced by a notice, and the API rejects setting a password for these accounts. Accounts are never made instance administrators by the provider; an existing administrator can promote them in **Instance Settings** &rarr; **Users**.
 
 :::danger Linking existing accounts by email
 `OIDC_LINK_EXISTING_BY_EMAIL=true` lets whoever controls an email address at the provider take over the OpenInvento account with that address. Only enable it if your provider verifies email addresses and users cannot change them freely, for example to migrate existing local accounts once. Linking only happens if the provider sends `email_verified: true` and the account is not linked yet.
 :::
+
+---
+
+## ID Token Audience
+
+The ID token's `aud` claim names the clients the token is meant for, and `azp` (authorized party) names the client that requested it. OpenInvento only accepts ID tokens whose `aud` contains **exactly** its own client ID (as a string or a one-element list), and `azp`, if present, must be that client ID too.
+
+Tokens that also name other audiences are rejected, even if `azp` is OpenInvento. [OpenID Connect Core, section 3.1.3.7, step 3](https://openid.net/specs/openid-connect-core-1_0.html#IDTokenValidation) requires rejecting tokens with audiences the client does not trust, because every listed audience could replay the token. If you use audience mappers (for example in Keycloak) that add further clients to ID tokens, remove them for the OpenInvento client; the log then shows `ID token has untrusted additional audiences`.
 
 ---
 
@@ -131,7 +148,8 @@ Use a long, random password for break-glass accounts and store it in a password 
 With `OIDC_AUTO_REDIRECT=true`, visiting the login page redirects straight to the provider, so users do not see the OpenInvento login page at all. The redirect is skipped:
 
 - after a failed single sign-on (`/auth/login?error=sso`), to avoid a redirect loop,
-- on `/auth/login?local=1`, which always shows the password form for break-glass accounts.
+- on `/auth/login?local=1`, which always shows the password form for break-glass accounts,
+- right after logging out of OpenInvento (`/auth/login?logged_out=1`), because the provider session would log the user straight back in.
 
 ---
 
@@ -140,6 +158,18 @@ With `OIDC_AUTO_REDIRECT=true`, visiting the login page redirects straight to th
 Logging out of OpenInvento ends the **OpenInvento session only**. The session at the provider stays active, so clicking **Sign in with …** again usually logs the user back in without asking for credentials. On shared devices, also log out at the provider.
 
 Single logout (RP-initiated logout at the provider's `end_session_endpoint`, front- or back-channel logout) is not supported yet.
+
+---
+
+## Tested Providers
+
+The login was tested end to end in a real browser against these providers, each behind a TLS proxy:
+
+| Provider | Notes |
+| :--- | :--- |
+| Pocket ID 2.18.0 | Sends `aud` as a one-element list and the RFC 9207 `iss` parameter. Public clients work. |
+| Keycloak 26.8.1 | Sends `azp` and the `iss` parameter. Realm issuer: `https://<host>/realms/<realm>`. Audience mappers must not add other clients to ID tokens (see above). |
+| Dex v2.44.0 | Sends no `preferred_username`; the username is taken from the local part of the email address. Issuer includes the path, e.g. `https://<host>/dex`. |
 
 ---
 
@@ -164,4 +194,12 @@ If the login page shows **"Single sign-on failed"**, the container log contains 
 | `Get Token Error … invalid_client` | Wrong client secret, or a public client is configured with a secret (or vice versa). |
 | `Signature has expired` | The clocks of the OpenInvento host and the provider differ. Enable NTP on both hosts. |
 | `OIDC login rejected: no account …` | `OIDC_CREATE_USERS=false` and the provider account is not linked to an OpenInvento account. |
-| Email address stays empty | Another OpenInvento account already uses this address. |
+| `ID token has untrusted additional audiences` | The provider adds other clients to `aud`, see [ID Token Audience](#id-token-audience). |
+| `ID token azp does not match the client ID` | The token was requested by another client. |
+| `… must use https (or set OIDC_ALLOW_INSECURE_HTTP)` | The issuer, discovery document or an endpoint uses `http://`. |
+| `Token response has no Bearer token_type` | The provider issues another token type (e.g. DPoP-bound tokens), which is not supported. |
+| `Authorization response iss does not match OIDC_ISSUER` / `… is missing the iss parameter` | The redirect came from another issuer than configured, or a provider that announces RFC 9207 support did not send `iss`. |
+| `The provider does not support PKCE S256, which public clients require.` | Use a confidential client (with secret) or enable S256 at the provider. |
+| `Token algorithm … does not match OIDC_SIGN_ALGO` | Set `OIDC_SIGN_ALGO` to the algorithm the provider uses for ID tokens. |
+| Login fails after returning from the provider much later | A started login expires after 10 minutes; start it again. |
+| Email address stays empty | Another OpenInvento account already uses this address, or the provider sent `email_verified: false`. |
