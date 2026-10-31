@@ -21,7 +21,7 @@ Requirements that only concern the identity provider are listed as "not applicab
 
 ## How it was verified
 
-**Unit tests.** `backend/account_auth/tests_oidc.py` (106 test methods; 153 tests in the whole backend, all passing) runs the full login flow against a fake provider that signs real RS256 tokens. Every check in the table below has at least one test, including the checks that live in mozilla-django-oidc or PyJWT, so a library upgrade that drops one of them shows up as a failing test. `oidc.py` has full branch coverage. The evidence column lists test method names.
+**Unit tests.** `backend/account_auth/tests_oidc.py` (128 test methods; 175 tests in the whole backend, all passing) runs the full login flow against a fake provider that signs real RS256 tokens. Every check in the table below has at least one test, including the checks that live in mozilla-django-oidc or PyJWT, so a library upgrade that drops one of them shows up as a failing test. `oidc.py` has full branch coverage. The evidence column lists test method names.
 
 **OpenID Foundation conformance suite.** The RP was run against the [OpenID Foundation conformance suite](https://openid.net/certification/) with the plans `oidcc-client-basic-certification-test-plan` (14 modules) and `oidcc-client-config-certification-test-plan` (6 modules), static client, `client_secret_basic`:
 
@@ -33,7 +33,9 @@ Requirements that only concern the identity provider are listed as "not applicab
 
 The one failure is an artefact of the test harness, not a finding. The module checks that the RP fetches the keys from the discovered `jwks_uri` and verifies the ID token with them; that check passed. The module then marks itself finished, but OpenInvento continues the normal login and calls the UserInfo endpoint, which reaches the already finished module and produces "Illegal test state change: FINISHED -> RUNNING". Module names in the table are shown without the `oidcc-client-test-` prefix.
 
-**Provider matrix.** Real logins in a browser behind TLS against Pocket ID 2.18.0, Keycloak 26.8.1 and Dex v2.44.0: first login creates the account without a local password, the second login reuses it. A separate capture recorded each provider's discovery document, authorization response, token response and claims. This showed, for example, that Pocket ID and Dex return `token_type` in lower case, that Pocket ID and Keycloak send the RFC 9207 `iss` parameter and Dex does not, and that Pocket ID sends `aud` as a one-element list.
+**Provider matrix.** Real logins in a browser behind TLS against Pocket ID 2.18.0, Keycloak 26.8.1, Dex v2.44.0 and Authentik 2026.8.5: first login creates the account without a local password, the second login reuses it. A separate capture recorded each provider's discovery document, authorization response, token response and claims. This showed, for example, that Pocket ID and Dex return `token_type` in lower case, that Pocket ID and Keycloak send the RFC 9207 `iss` parameter and Dex does not, that Pocket ID sends `aud` as a one-element list, and that Authentik signs with HS256 when no signing key is selected and always sends `email_verified: false` with its default email mapping.
+
+The provider certificates in the matrix come from the private CA of the TLS proxy, so every login also exercises `OIDC_CA_BUNDLE`. Four extra runs check the TLS settings against Keycloak: without the CA the login ends on the failure page, with `OIDC_CA_BUNDLE` or `OIDC_SKIP_SSL_VERIFICATION` it reaches the provider, and with both set OIDC stays disabled.
 
 **Container image test.** The production Docker image behind a TLS reverse proxy (`https://inventory.test`) against Pocket ID: three complete logins, PKCE S256, `redirect_uri` built from `APP_URL`, and two front-channel attacks:
 
@@ -48,7 +50,7 @@ It also checked the local login rules (password login refused for SSO users, all
 - **Access is checked at login only.** Disabling a user at the provider does not end an existing OpenInvento session; it only prevents the next login. Deactivating the account in OpenInvento ends its sessions immediately.
 - **No RP-initiated logout.** Logging out ends the OpenInvento session only. The provider session stays active, so the next "Sign in with ..." click may log in without a prompt. Automatic redirect to the provider is skipped right after a logout.
 - **One provider.** Exactly one issuer can be configured. Mix-up attacks between several providers therefore do not apply; the `iss` response parameter is still checked.
-- **Signing algorithms.** ID tokens must be signed with RS256/384/512, ES256/384/512, or HS256/384/512 with a client secret of at least 32 characters. PS256/384/512 and EdDSA are not supported; OIDC stays disabled and an error is logged at startup.
+- **Signing algorithms.** ID tokens must be signed with RS256/384/512 or ES256/384/512. HS256/384/512 are not supported on purpose: with HMAC the client secret is the signing key (Core 10.1), so anyone who can read it from the configuration, a backup or the provider could issue ID tokens for any user, and a public client has no secret at all. Every OpenID provider must support RS256 (Core 15.1). PS256/384/512 and EdDSA are not supported either. With any other value OIDC stays disabled and an error is logged at startup.
 - **Client authentication.** `client_secret_post` (default), `client_secret_basic` (`OIDC_TOKEN_USE_BASIC_AUTH`) or none (public client with PKCE). `private_key_jwt` and mutual TLS are not supported.
 
 ## Requirement catalog
@@ -61,7 +63,7 @@ Status values: **covered** (implemented and tested), **not applicable** (feature
 |---|---|---|---|---|
 | AR-01 | Request contains the `openid` scope (Core 3.1.2.1) | covered | `get_scopes` always puts `openid` first, whatever `OIDC_SCOPES` says | `test_openid_scope_is_always_requested`, `test_redirects_to_discovered_endpoint_with_pkce_state_and_nonce` |
 | AR-02 | `response_type=code` (Core 3.1.2.1) | covered | Library request view sends `code` only | `test_redirects_to_discovered_endpoint_with_pkce_state_and_nonce`; suite: all basic modules |
-| AR-03 | `redirect_uri` exactly matches the registered value, also behind a TLS proxy (Core 3.1.2.1) | covered | `get_callback_url` builds it from `APP_URL`; request URL only as fallback | `test_redirect_uri_is_built_from_app_url`, `test_redirect_uri_falls_back_to_request_without_app_url`; docker |
+| AR-03 | `redirect_uri` exactly matches the registered value, also behind a TLS proxy (Core 3.1.2.1) | covered | `get_callback_url` uses `OIDC_REDIRECT_URI`, otherwise builds it from `APP_URL` (with only `APP_URLS` set, its first entry); request URL only as fallback | `test_redirect_uri_is_built_from_app_url`, `test_redirect_uri_can_be_set_explicitly`, `test_authorization_request_uses_explicit_redirect_uri`, `test_redirect_uri_falls_back_to_request_without_app_url`; docker |
 | AR-04 | Existing query of the authorization endpoint is kept (RFC 6749 3.1) | covered | `OIDCLoginView.get` splits off the endpoint query and merges it into the redirect | `test_authorization_endpoint_query_is_preserved` |
 | AR-05 | Unguessable `state` bound to the browser (RFC 6749 10.12) | covered | 32 random characters, stored in the server-side session (library) | `test_redirects_to_discovered_endpoint_with_pkce_state_and_nonce`, `test_unknown_state_is_rejected`; docker: login CSRF |
 | AR-06 | Random `nonce` bound to the session (Core 15.5.2) | covered | Stored next to the state (library) | `test_redirects_to_discovered_endpoint_with_pkce_state_and_nonce`; suite: `nonce-invalid` |
@@ -75,7 +77,7 @@ Status values: **covered** (implemented and tested), **not applicable** (feature
 | ID | Requirement (source §) | Status | How it is handled | Evidence |
 |---|---|---|---|---|
 | RS-01 | `state` present and known in this session (Core 3.1.2.7, RFC 6749 10.12) | covered | `OIDCCallbackView.has_valid_state` before anything else | `test_unknown_state_is_rejected`; docker: login CSRF |
-| RS-02 | State, nonce and verifier are used once (RFC 9700 4.2.4) | covered | Library deletes the entry before the token request | `test_state_cannot_be_replayed` |
+| RS-02 | State, nonce and verifier are used once (RFC 9700 4.2.4) | covered | `has_valid_state` only checks the state and drops expired entries; the library callback then deletes the entry before the token request. Two callbacks with the same state that race in the same session could both pass this check, but the provider redeems an authorization code only once (RFC 6749 4.1.2), so at most one of them gets tokens | `test_state_cannot_be_replayed` |
 | RS-03 | Pending logins expire | covered | `has_valid_state` drops entries older than 10 minutes | `test_expired_state_is_rejected` |
 | RS-04 | Error responses are not trusted and have no side effects (RFC 9207 2.4) | covered | Error responses without a valid state end in the failure page and no logout; provider text is never shown | `test_error_without_valid_state_keeps_session`, `test_provider_error_response_fails` |
 | RS-05 | `iss` response parameter (RFC 9207 2.4) | covered | `check_iss_parameter`: must equal `OIDC_ISSUER`; required when discovery advertises it (with explicit endpoints only a wrong value is rejected) | `test_iss_response_parameter_must_match`, `test_matching_iss_response_parameter_is_accepted`, `test_iss_response_parameter_is_required_when_advertised`; matrix: Pocket ID, Keycloak |
@@ -85,7 +87,7 @@ Status values: **covered** (implemented and tested), **not applicable** (feature
 
 | ID | Requirement (source §) | Status | How it is handled | Evidence |
 |---|---|---|---|---|
-| TK-01 | TLS for token, JWKS, UserInfo and discovery (Core 3.1.3) | covered | `require_https` for issuer and all endpoints, except loopback or `OIDC_ALLOW_INSECURE_HTTP`; certificates verified | `test_http_issuer_is_rejected`, `test_http_endpoint_from_discovery_is_rejected`, `test_http_loopback_issuer_is_allowed`, `test_http_issuer_can_be_allowed_explicitly` |
+| TK-01 | TLS for token, JWKS, UserInfo and discovery (Core 3.1.3) | covered | `require_https` for issuer and all endpoints, except loopback or `OIDC_ALLOW_INSECURE_HTTP`; certificates verified against the default trust store or `OIDC_CA_BUNDLE` (`tls_verify`). `OIDC_SKIP_SSL_VERIFICATION` turns the check off and logs a warning at startup; together with `OIDC_CA_BUNDLE`, or with a CA bundle that does not exist, OIDC stays disabled | `test_http_issuer_is_rejected`, `test_http_endpoint_from_discovery_is_rejected`, `test_http_loopback_issuer_is_allowed`, `test_http_issuer_can_be_allowed_explicitly`, `OIDCTLSSettingsTests`; matrix: TLS settings |
 | TK-02 | Same `redirect_uri` in the token request (RFC 6749 4.1.3) | covered | `OIDCBackend.get_token` | `test_token_request_uses_pkce_verifier_and_app_url` |
 | TK-03 | Send `code_verifier` (RFC 7636 4.5) | covered | Library token request | `test_token_request_uses_pkce_verifier_and_app_url`; docker |
 | TK-04 | Client authentication; asymmetric methods recommended (RFC 9700 2.5) | out of scope | Shared secret (post, or basic with form-urlencoded credentials per RFC 6749 2.3.1) or public client with PKCE (never Basic auth); `private_key_jwt` not implemented (RECOMMENDED only) | `test_token_request_uses_pkce_verifier_and_app_url`, `test_basic_auth_sends_secret_in_header`, `test_basic_auth_credentials_are_form_urlencoded`, `test_basic_auth_is_not_used_for_public_clients`, `test_public_client_does_not_send_empty_secret`; suite: `client-secret-basic` |
@@ -103,7 +105,7 @@ Status values: **covered** (implemented and tested), **not applicable** (feature
 | IDT-05 | `azp` equals the client ID (step 5) | covered | `validate_id_token_claims` | `test_azp_of_another_client_is_rejected` |
 | IDT-06 | Signature verified with the issuer's keys (step 6) | covered | Keys fetched from `jwks_uri` on every login, so key rotation works | `test_id_token_with_bad_signature_is_rejected`, `test_id_token_with_unknown_kid_is_rejected`; suite: `invalid-sig-rs256`, `signing-key-rotation`, `signing-key-rotation-just-before-signing`, `discovery-jwks-uri-keys` |
 | IDT-07 | Expected algorithm only; no `none`, no key confusion (step 7) | covered | `_verify_jws` compares the header with the configured algorithm and passes it as a one-element list | `test_id_token_alg_none_is_rejected`, `test_id_token_hs256_signed_with_public_key_is_rejected`, `test_id_token_with_other_algorithm_than_configured_is_rejected`; suite: `idtoken-sig-rs256`, `idtoken-sig-none` (rejected) |
-| IDT-08 | HMAC algorithms use the client secret (step 8) | covered | `sign_algo_supported` allows HS* only with a secret of at least 32 characters | `test_hmac_algo_needs_a_long_client_secret` |
+| IDT-08 | HMAC algorithms use the client secret (step 8) | not applicable | HS256/384/512 are not supported, see [Known limitations](#known-limitations); `sign_algo_supported` disables OIDC for them | `test_hmac_algorithms_are_not_supported` |
 | IDT-09 | `exp` present and in the future (step 9) | covered | `validate_id_token_claims` requires it; PyJWT checks it | `test_expired_id_token_is_rejected`, `test_id_token_without_exp_is_rejected` |
 | IDT-10 | `iat` present and plausible, clock skew tolerated (step 10, Core 2) | covered | `iat` required; 60 s leeway in `_verify_jws` | `test_id_token_without_iat_is_rejected`, `test_id_token_iat_slightly_in_future_is_accepted`, `test_id_token_iat_far_in_future_is_rejected`; suite: `missing-iat` |
 | IDT-11 | `nonce` present and equal to the session value (step 11) | covered | Library compares it; one-time state prevents replay | `test_wrong_nonce_is_rejected`, `test_id_token_without_nonce_is_rejected`; suite: `nonce-invalid` |
@@ -123,7 +125,7 @@ Status values: **covered** (implemented and tested), **not applicable** (feature
 | ID | Requirement (source §) | Status | How it is handled | Evidence |
 |---|---|---|---|---|
 | UI-01 | UserInfo `sub` equals the ID token `sub` | covered | `get_or_create_user` | `test_userinfo_subject_mismatch_is_rejected`, `test_userinfo_without_sub_is_rejected`; suite: `userinfo-invalid-sub` |
-| UI-02 | Signed UserInfo: signature, `iss` and `aud` | covered | `OIDCBackend.get_userinfo`: a signed (`application/jwt`) response is verified like a token and must contain matching `iss` and `aud`; any response must be a JSON object | `test_signed_userinfo_without_iss_and_aud_is_rejected`, `test_signed_userinfo_is_accepted`, `test_signed_userinfo_with_audience_list_is_accepted`, `test_signed_userinfo_with_wrong_audience_is_rejected`, `test_userinfo_that_is_not_an_object_fails_cleanly` |
+| UI-02 | Signed UserInfo: signature, `iss` and `aud` | covered | `OIDCBackend.get_userinfo`: only `application/json` and `application/jwt` are accepted (Core 5.3.2); a signed response is verified like a token and must contain matching `iss` and `aud`; any response must be a JSON object | `test_signed_userinfo_without_iss_and_aud_is_rejected`, `test_signed_userinfo_is_accepted`, `test_signed_userinfo_with_audience_list_is_accepted`, `test_signed_userinfo_with_wrong_audience_is_rejected`, `test_userinfo_that_is_not_an_object_fails_cleanly`, `test_userinfo_json_with_charset_is_accepted`, `test_userinfo_with_other_content_type_is_rejected` |
 | UI-03 | UserInfo is not used before the ID token is validated | covered | `validate_id_token_claims` runs before `get_userinfo` | `test_wrong_issuer_is_rejected` (no user created), `test_id_token_without_iat_is_rejected` (no UserInfo request); suite: `scope-userinfo-claims` |
 
 ### Claims and accounts
@@ -156,9 +158,9 @@ Status values: **covered** (implemented and tested), **not applicable** (feature
 
 | ID | Requirement (source §) | Status | How it is handled | Evidence |
 |---|---|---|---|---|
-| JW-01 | Algorithm allow-list, one algorithm per key (3.1) | covered | `_verify_jws`; JWKS keys filtered by `alg` and key type | `test_id_token_hs256_signed_with_public_key_is_rejected`, `test_id_token_with_other_algorithm_than_configured_is_rejected` |
+| JW-01 | Algorithm allow-list, one algorithm per key (3.1) | covered | `retrieve_matching_jwk` and `_verify_jws` compare the header with the configured algorithm; JWKS keys filtered by `alg` and key type | `test_id_token_hs256_signed_with_public_key_is_rejected`, `test_id_token_with_other_algorithm_than_configured_is_rejected`, `test_hmac_signed_id_token_names_the_algorithm_mismatch` |
 | JW-02 | Reject `none` (3.2) | covered | Unsigned tokens are never accepted | `test_id_token_alg_none_is_rejected`, `test_unsupported_sign_algo_disables_oidc`; suite: `idtoken-sig-none` (rejected) |
-| JW-03 | Only current algorithms (3.2) | covered | `sign_algo_supported` allow-list; OIDC disabled and an error logged otherwise | `test_unsupported_sign_algo_disables_oidc`, `test_unsupported_sign_algo_is_logged_at_startup`, `test_hmac_algo_needs_a_long_client_secret` |
+| JW-03 | Only current algorithms (3.2) | covered | `sign_algo_supported` allow-list; OIDC disabled and an error logged otherwise | `test_unsupported_sign_algo_disables_oidc`, `test_unsupported_sign_algo_is_logged_at_startup`, `test_hmac_algorithms_are_not_supported` |
 | JW-04 | Key selection without `kid` (RFC 7515) | covered | `retrieve_matching_jwk` uses the single key whose type and curve fit the algorithm, otherwise fails | `test_id_token_without_kid_and_single_key_is_accepted`, `test_id_token_without_kid_picks_the_only_key_of_matching_type`, `test_id_token_without_kid_and_two_keys_is_rejected`; suite: `kid-absent-single-jwks`, `kid-absent-multiple-jwks` |
 
 ### OpenID Connect Core section 16
@@ -176,7 +178,7 @@ Status values: **covered** (implemented and tested), **not applicable** (feature
 | S16-16 | Implicit flow threats (16.16) | covered | Code flow only | `test_redirects_to_discovered_endpoint_with_pkce_state_and_nonce` |
 | S16-17 | TLS requirements (16.17) | covered | See TK-01 | see TK-01 |
 | S16-18 | Long-lived access tokens (16.18) | not applicable | Tokens are discarded after the login | – |
-| S16-19 | Symmetric key entropy (16.19) | covered | HMAC needs a client secret of at least 32 characters | `test_hmac_algo_needs_a_long_client_secret` |
+| S16-19 | Symmetric key entropy (16.19) | not applicable | No symmetric signing (IDT-08) | `test_hmac_algorithms_are_not_supported` |
 | S16-22 | No HTTP 307 to the redirect URI (16.22) | not applicable | Provider-side; our own redirects are 302 | – |
 | S16-x | 16.1, 16.5 to 16.8, 16.13, 16.14, 16.20, 16.21, 16.23 | not applicable | Request objects, encryption, native apps and resource-server roles are not used | – |
 

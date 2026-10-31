@@ -17,11 +17,13 @@ Single sign-on is **disabled by default** and works next to the regular password
 - OpenInvento uses the **Authorization Code flow with PKCE** ([RFC 7636](https://datatracker.ietf.org/doc/html/rfc7636), as recommended by the OAuth 2.0 Security Best Current Practice, [RFC 9700](https://datatracker.ietf.org/doc/html/rfc9700)). This works for both confidential clients (with a client secret) and public clients (PKCE only).
 - The provider endpoints are read from `OIDC_ISSUER/.well-known/openid-configuration` ([OpenID Connect Discovery](https://openid.net/specs/openid-connect-discovery-1_0.html)) and cached for one hour. They can also be set explicitly.
 - The ID token is validated as described in [OpenID Connect Core, section 3.1.3.7](https://openid.net/specs/openid-connect-core-1_0.html#IDTokenValidation): signature (via the provider's JWKS, only with the configured algorithm), issuer, audience, `azp`, expiry, issue time and nonce. Clock differences of up to 60 seconds to the provider are tolerated.
-- All provider URLs (issuer, discovery and endpoints) must use **https** ([OpenID Connect Core, section 16.17](https://openid.net/specs/openid-connect-core-1_0.html#TLSRequirements)). Plain `http://` is only accepted for `localhost`/`127.0.0.1`/`::1`, or when `OIDC_ALLOW_INSECURE_HTTP=true` is set for tests.
+- All provider URLs (issuer, discovery and endpoints) must use **https** ([OpenID Connect Core, section 16.17](https://openid.net/specs/openid-connect-core-1_0.html#TLSRequirements)). Plain `http://` is only accepted for `localhost`/`127.0.0.1`/`::1`, or when `OIDC_ALLOW_INSECURE_HTTP=true` is set for tests. The provider's certificate is verified; for a private CA or a self-signed certificate see [Providers with a Private or Self-Signed Certificate](#providers-with-a-private-or-self-signed-certificate).
+- ID tokens must be signed asymmetrically (RS256 by default). HMAC (HS256) is not supported, see [Signing Algorithms](#signing-algorithms).
 - If the provider sends the `iss` parameter in its redirect ([RFC 9207](https://datatracker.ietf.org/doc/html/rfc9207)), it must match `OIDC_ISSUER`. If the provider announces support for it, it is required.
 - A started login is valid for 10 minutes. The scope `openid` is always requested, even if `OIDC_SCOPES` does not contain it.
 - Users are identified by the **issuer and subject (`sub`)** of their provider account, as required by [OpenID Connect Core](https://openid.net/specs/openid-connect-core-1_0.html#ClaimStability). The email address is never used to identify a returning user, because it can change or be reassigned at the provider.
 - After a successful login, OpenInvento creates a normal Django session. API keys keep working as before.
+- The login and signup pages read their settings (single sign-on button, password form, email login, signup) from the public endpoint `/api/login-config/`. It returns only these login page settings; `/api/instance-settings/` still needs a login.
 
 ---
 
@@ -31,17 +33,16 @@ Create a new OIDC client (sometimes called "application" or "relying party") at 
 
 | Setting | Value |
 | :--- | :--- |
-| Redirect / callback URI | `https://inventory.example.com/api/oidc/callback/` (your `APP_URL` followed by `/api/oidc/callback/`, including the trailing slash) |
+| Redirect / callback URI | `https://inventory.example.com/api/oidc/callback/` (your `APP_URL` followed by `/api/oidc/callback/`, including the trailing slash, or the value of `OIDC_REDIRECT_URI`) |
 | Grant type | Authorization Code |
 | PKCE | Enabled (`S256`) |
 | Scopes | `openid profile email` |
 | Client type | Confidential (with client secret) or public (no secret) |
+| ID token signing | RS256 (or another RS/ES algorithm), not HS256 |
 
 Note the **client ID**, the **client secret** (confidential clients only) and the **issuer URL**. The issuer is the base URL that the provider's discovery document lists as `issuer`, for example `https://id.example.com` for Pocket ID or `https://sso.example.com/realms/home` for Keycloak.
 
-:::tip Pocket ID
-In Pocket ID, go to **Administration** &rarr; **OIDC Clients** &rarr; **Add OIDC Client**, enter the callback URL above and keep **PKCE** enabled. Mark the client as **Public Client** if you do not want to use a client secret. The issuer is your Pocket ID URL (`APP_URL` of Pocket ID).
-:::
+Step-by-step settings for Pocket ID, Keycloak, Authentik and Dex are in [Provider Examples](#provider-examples).
 
 ---
 
@@ -60,8 +61,8 @@ OIDC_BUTTON_LABEL=Pocket ID             # optional: "Sign in with Pocket ID"
 
 Restart the container. The login page now shows a **Sign in with …** button.
 
-:::warning APP_URL is required
-The redirect URI is built from `APP_URL`, so it stays correct behind a reverse proxy that terminates TLS. If only `APP_URLS` is set, the redirect URI is derived from the incoming request, which is usually `http://` behind a proxy and is then rejected by the provider.
+:::warning Redirect URI
+The redirect URI is built from `APP_URL`, so it stays correct behind a reverse proxy that terminates TLS. If only `APP_URLS` is set, its **first** entry is used. If users reach OpenInvento under several URLs, register the one OpenInvento sends at the provider, or set `OIDC_REDIRECT_URI` to the full redirect URI you registered, for example `OIDC_REDIRECT_URI=https://inventory.example.com/api/oidc/callback/`. The path must stay `/api/oidc/callback/`. Without `APP_URL`, `APP_URLS` and `OIDC_REDIRECT_URI`, the redirect URI is derived from the incoming request, which is usually `http://` behind a proxy and is then rejected by the provider.
 :::
 
 ### Environment Variables
@@ -80,7 +81,10 @@ The redirect URI is built from `APP_URL`, so it stays correct behind a reverse p
 | `OIDC_LINK_EXISTING_BY_EMAIL` | No | `false` | Links the first OIDC login to an existing, not yet linked account with the same email address, but only if the provider marks the address as verified (`email_verified`). See the security note below. |
 | `OIDC_AUTO_REDIRECT` | No | `false` | Skips the login page and redirects straight to the provider. |
 | `OIDC_BUTTON_LABEL` | No | empty | Provider name shown on the login button ("Sign in with *label*"). Without it, the button reads "Sign in with single sign-on". |
-| `OIDC_SIGN_ALGO` | No | `RS256` | Signing algorithm of the ID tokens: `RS256`, `RS384`, `RS512`, `ES256`, `ES384`, `ES512`, or `HS256`/`HS384`/`HS512` with a client secret of at least 32 characters. Any other value (e.g. `PS256`, `EdDSA`, `none`) disables OIDC login and logs an error at startup. |
+| `OIDC_SIGN_ALGO` | No | `RS256` | Signing algorithm of the ID tokens: `RS256`, `RS384`, `RS512`, `ES256`, `ES384` or `ES512`. Any other value (e.g. `HS256`, `PS256`, `EdDSA`, `none`) disables OIDC login and logs an error at startup, see [Signing Algorithms](#signing-algorithms). |
+| `OIDC_REDIRECT_URI` | No | `APP_URL` + `/api/oidc/callback/` | Full redirect URI sent to the provider. Only needed if it differs from `APP_URL` (or the first `APP_URLS` entry) followed by `/api/oidc/callback/`. Must match the URI registered at the provider exactly. |
+| `OIDC_CA_BUNDLE` | No | empty | Path to a CA certificate file (PEM, several certificates may be concatenated) or a hashed certificate directory inside the container. Used instead of the built-in CA list to verify the provider's certificate. See [Providers with a Private or Self-Signed Certificate](#providers-with-a-private-or-self-signed-certificate). |
+| `OIDC_SKIP_SSL_VERIFICATION` | No | `false` | Turns off the certificate check for all provider requests. **Insecure**, see the warning in [Providers with a Private or Self-Signed Certificate](#providers-with-a-private-or-self-signed-certificate). Cannot be combined with `OIDC_CA_BUNDLE`. |
 | `OIDC_TOKEN_USE_BASIC_AUTH` | No | `false` | Sends the client secret as HTTP Basic authentication (`client_secret_basic`) instead of in the request body (`client_secret_post`). |
 | `OIDC_TIMEOUT` | No | `10` | Timeout in seconds for requests to the provider. |
 | `OIDC_ALLOW_INSECURE_HTTP` | No | `false` | Accepts `http://` provider URLs on hosts other than loopback. Only for test setups: over plain http, anyone on the network can replace the provider's keys and tokens. |
@@ -90,6 +94,191 @@ The redirect URI is built from `APP_URL`, so it stays correct behind a reverse p
 | `OIDC_JWKS_ENDPOINT` | No | discovered | Overrides the JWKS endpoint. If all four endpoints are set, the discovery document is not fetched at all. |
 | `DISABLE_LOCAL_LOGIN` | No | `false` | Disables password login and public signup for all accounts except `LOCAL_LOGIN_USERS`. |
 | `LOCAL_LOGIN_USERS` | No | `INIT_ADMIN_USERNAME` | Comma-separated usernames that keep password login when `DISABLE_LOCAL_LOGIN` is enabled (break-glass accounts). |
+
+---
+
+## Provider Examples
+
+These settings were used in the [tested setups](#tested-providers). Replace the host names, and generate your own client secret, for example with `openssl rand -hex 32`.
+
+### Pocket ID
+
+In Pocket ID, go to **Administration** &rarr; **OIDC Clients** &rarr; **Add OIDC Client**, enter the callback URL and keep **PKCE** enabled. Mark the client as **Public Client** if you do not want to use a client secret. The issuer is your Pocket ID URL (`APP_URL` of Pocket ID), without a trailing slash.
+
+```bash
+OIDC_ENABLED=true
+OIDC_ISSUER=https://id.example.com
+OIDC_CLIENT_ID=<client ID shown by Pocket ID>
+OIDC_CLIENT_SECRET=<client secret, empty for a public client>
+OIDC_BUTTON_LABEL=Pocket ID
+```
+
+### Keycloak
+
+In the admin console, select your realm and go to **Clients** &rarr; **Create client**:
+
+1. **Client type** `OpenID Connect`, **Client ID** `openinvento`.
+2. **Client authentication** on (confidential client). Under **Authentication flow**, keep only **Standard flow**.
+3. **Valid redirect URIs**: `https://inventory.example.com/api/oidc/callback/`.
+4. After saving, open **Advanced** &rarr; **Advanced settings** and set **Proof Key for Code Exchange Code Challenge Method** to `S256`.
+5. Copy the secret from the **Credentials** tab.
+
+```bash
+OIDC_ENABLED=true
+OIDC_ISSUER=https://sso.example.com/realms/home
+OIDC_CLIENT_ID=openinvento
+OIDC_CLIENT_SECRET=<secret from the Credentials tab>
+OIDC_BUTTON_LABEL=Keycloak
+```
+
+The issuer is `https://<host>/realms/<realm>`, without a trailing slash. The same client as part of a realm import (`kc.sh import` or `--import-realm`):
+
+```json
+{
+  "clientId": "openinvento",
+  "protocol": "openid-connect",
+  "publicClient": false,
+  "secret": "<client secret>",
+  "standardFlowEnabled": true,
+  "directAccessGrantsEnabled": false,
+  "redirectUris": ["https://inventory.example.com/api/oidc/callback/"],
+  "attributes": {"pkce.code.challenge.method": "S256"}
+}
+```
+
+Keycloak sends `email_verified` from the user's **Email verified** flag. Addresses that are not marked verified are not copied to OpenInvento. Do not add [audience mappers](#id-token-audience) that put other clients into the ID token.
+
+### Authentik
+
+In the admin interface, go to **Applications** &rarr; **Applications** &rarr; **New Application**. The wizard creates the application and its provider together:
+
+1. Application **Name** `OpenInvento`, **Slug** `openinvento`.
+2. Provider type **OAuth2/OpenID Provider**, **Authorization flow** `default-provider-authorization-implicit-consent` (or the explicit consent flow).
+3. **Client type** `Confidential`. Add the redirect URI `https://inventory.example.com/api/oidc/callback/` with matching mode **Strict**.
+4. **Signing Key**: select a key, for example `authentik Self-signed Certificate`. Without a signing key, Authentik signs ID tokens with HS256 and the client secret, which OpenInvento rejects (see [Signing Algorithms](#signing-algorithms)).
+
+```bash
+OIDC_ENABLED=true
+OIDC_ISSUER=https://authentik.example.com/application/o/openinvento/
+OIDC_CLIENT_ID=<client ID of the provider>
+OIDC_CLIENT_SECRET=<client secret of the provider>
+OIDC_BUTTON_LABEL=Authentik
+```
+
+The issuer is `https://<host>/application/o/<application slug>/` **with** the trailing slash, exactly as the provider page shows it under **OpenID Configuration Issuer**.
+
+:::note Email addresses from Authentik
+Authentik's default `email` scope mapping always sends `email_verified: false`, so OpenInvento does not copy the address and `OIDC_LINK_EXISTING_BY_EMAIL` never links an account. If the addresses in Authentik are trustworthy (set by administrators or verified by an enrollment flow, and users cannot change them freely), create a scope mapping under **Customization** &rarr; **Property Mappings** &rarr; **Create** &rarr; **Scope Mapping** with scope name `email` and this expression:
+
+```python
+return {"email": request.user.email, "email_verified": True}
+```
+
+Then replace `authentik default OAuth Mapping: OpenID 'email'` with it in the provider's **Advanced protocol settings** &rarr; **Scopes**. If users can change their own address in Authentik, keep the default mapping.
+:::
+
+The same setup as a [blueprint](https://docs.goauthentik.io/customize/blueprints/), including the scope mapping. In blueprints and API calls, set `grant_types` explicitly: since Authentik 2026.8 the list is empty if it is not set, and every login then fails with `Invalid grant_type for provider` in the Authentik log.
+
+```yaml
+version: 1
+metadata:
+  name: OpenInvento
+entries:
+  - model: authentik_providers_oauth2.scopemapping
+    id: scope-email-verified
+    identifiers: {name: "OpenInvento: email (verified)"}
+    attrs:
+      scope_name: email
+      expression: |
+        return {"email": request.user.email, "email_verified": True}
+  - model: authentik_providers_oauth2.oauth2provider
+    id: provider
+    identifiers: {name: OpenInvento}
+    attrs:
+      authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
+      invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+      client_type: confidential
+      client_id: openinvento
+      client_secret: <client secret>
+      grant_types: [authorization_code]
+      redirect_uris:
+        - {matching_mode: strict, url: "https://inventory.example.com/api/oidc/callback/"}
+      signing_key: !Find [authentik_crypto.certificatekeypair, [name, authentik Self-signed Certificate]]
+      property_mappings:
+        - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-openid]]
+        - !KeyOf scope-email-verified
+        - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-profile]]
+  - model: authentik_core.application
+    identifiers: {slug: openinvento}
+    attrs: {name: OpenInvento, provider: !KeyOf provider}
+```
+
+### Dex
+
+Add a static client to the Dex configuration:
+
+```yaml
+staticClients:
+  - id: openinvento
+    name: OpenInvento
+    secret: <client secret>
+    redirectURIs:
+      - https://inventory.example.com/api/oidc/callback/
+```
+
+```bash
+OIDC_ENABLED=true
+OIDC_ISSUER=https://dex.example.com/dex
+OIDC_CLIENT_ID=openinvento
+OIDC_CLIENT_SECRET=<client secret>
+OIDC_BUTTON_LABEL=Dex
+```
+
+The issuer is the `issuer` value of the Dex configuration, including its path. Dex sends no `preferred_username`, so the username is taken from the local part of the email address.
+
+---
+
+## Providers with a Private or Self-Signed Certificate
+
+OpenInvento checks the provider's certificate against the public CA list built into the container (the Mozilla list shipped with Python's `certifi`). A provider whose certificate comes from your own CA (for example step-ca, Caddy `local_certs`, an Active Directory CA or a router CA) or that uses a self-signed certificate is therefore rejected: the login page shows "Single sign-on failed" and the log contains `CERTIFICATE_VERIFY_FAILED`.
+
+To trust such a certificate:
+
+1. Get the **CA certificate** in PEM format (a text file starting with `-----BEGIN CERTIFICATE-----`). For your own CA, use its root certificate, not the server certificate, so that certificate renewals keep working. For a self-signed server certificate, use that certificate itself. Examples: Caddy keeps it in `/data/caddy/pki/authorities/local/root.crt`, step-ca prints it with `step ca root ca.pem`.
+2. Mount the file into the container and point `OIDC_CA_BUNDLE` to it:
+
+```yaml
+services:
+  openinvento:
+    environment:
+      OIDC_CA_BUNDLE: /certs/ca.pem
+    volumes:
+      - openinvento-data:/data
+      - ./ca.pem:/certs/ca.pem:ro
+```
+
+3. Restart the container. If the file does not exist at that path, single sign-on stays disabled and the log says so at startup.
+
+Good to know:
+
+- `OIDC_CA_BUNDLE` **replaces** the built-in CA list for requests to the provider. If your provider has a certificate from a public CA, do not set it. To trust several CAs, concatenate their PEM files into one.
+- It only affects requests to the provider. Other outgoing requests, such as the update check, keep using the built-in CA list.
+- The host name in the issuer URL must appear in the provider certificate (subject alternative name), as with any https connection.
+- Instead of a file, `OIDC_CA_BUNDLE` can point to a directory of certificates prepared with `openssl rehash`.
+
+:::danger OIDC_SKIP_SSL_VERIFICATION
+`OIDC_SKIP_SSL_VERIFICATION=true` turns off the certificate check for all requests to the provider. Then anyone who can intercept the connection between OpenInvento and the provider (another device on the network, a compromised router, a spoofed DNS answer) can read the client secret and the authorization codes, and can answer with their own discovery document, keys and ID tokens. That lets them **log in as any user, including administrators**. Use it at most for a short test, and use `OIDC_CA_BUNDLE` instead. OpenInvento logs a warning at every start while it is set. Setting both options disables single sign-on.
+:::
+
+---
+
+## Signing Algorithms
+
+OpenInvento accepts ID tokens signed with RS256, RS384, RS512, ES256, ES384 or ES512. The provider signs with its private key, and OpenInvento checks the signature with the public keys from the provider's JWKS. A leaked OpenInvento configuration therefore never allows forging an ID token.
+
+HMAC algorithms (HS256, HS384, HS512) are **not supported**. With HMAC, the provider signs the ID token with the client secret ([OpenID Connect Core, section 10.1](https://openid.net/specs/openid-connect-core-1_0.html#Signing)), the same value that is stored in OpenInvento's environment, its backups and the provider. Anyone who can read the secret could then issue valid ID tokens for any user and log in without the provider. Public clients have no secret at all. Every OpenID provider must support RS256 ([section 15.1](https://openid.net/specs/openid-connect-core-1_0.html#ServerMTI)), so HMAC is never needed.
+
+If your provider signs with HS256 (for example Authentik when no signing key is selected), select a signing key at the provider. The login otherwise fails with `Token algorithm 'HS256' does not match OIDC_SIGN_ALGO`, and setting `OIDC_SIGN_ALGO=HS256` disables single sign-on with an error at startup.
 
 ---
 
@@ -170,6 +359,9 @@ The login was tested end to end in a real browser against these providers, each 
 | Pocket ID 2.18.0 | Sends `aud` as a one-element list and the RFC 9207 `iss` parameter. Public clients work. |
 | Keycloak 26.8.1 | Sends `azp` and the `iss` parameter. Realm issuer: `https://<host>/realms/<realm>`. Audience mappers must not add other clients to ID tokens (see above). |
 | Dex v2.44.0 | Sends no `preferred_username`; the username is taken from the local part of the email address. Issuer includes the path, e.g. `https://<host>/dex`. |
+| Authentik 2026.8.5 | Issuer ends with a slash: `https://<host>/application/o/<slug>/`. Needs a signing key (otherwise HS256) and a custom email mapping to send `email_verified: true`, see [Authentik](#authentik). |
+
+In all of these tests the providers used certificates from a private CA, trusted through `OIDC_CA_BUNDLE`.
 
 ---
 
@@ -202,4 +394,10 @@ If the login page shows **"Single sign-on failed"**, the container log contains 
 | `The provider does not support PKCE S256, which public clients require.` | Use a confidential client (with secret) or enable S256 at the provider. |
 | `Token algorithm … does not match OIDC_SIGN_ALGO` | Set `OIDC_SIGN_ALGO` to the algorithm the provider uses for ID tokens. |
 | Login fails after returning from the provider much later | A started login expires after 10 minutes; start it again. |
-| Email address stays empty | Another OpenInvento account already uses this address, or the provider sent `email_verified: false`. |
+| Email address stays empty | Another OpenInvento account already uses this address, or the provider sent `email_verified: false` (Authentik does this by default, see [Authentik](#authentik)). |
+| `CERTIFICATE_VERIFY_FAILED` | The provider's certificate is not issued by a public CA. See [Providers with a Private or Self-Signed Certificate](#providers-with-a-private-or-self-signed-certificate). |
+| `OIDC login is disabled: OIDC_CA_BUNDLE … does not exist.` | The path in `OIDC_CA_BUNDLE` is not mounted into the container, or has a typo. |
+| `OIDC login is disabled: OIDC_SKIP_SSL_VERIFICATION and OIDC_CA_BUNDLE are both set` | Remove one of them, preferably `OIDC_SKIP_SSL_VERIFICATION`. |
+| `Token algorithm 'HS256' does not match OIDC_SIGN_ALGO` | The provider signs with HMAC. Select a signing key at the provider, see [Signing Algorithms](#signing-algorithms). |
+| `UserInfo response has unexpected content type …` | The UserInfo endpoint answered with something other than JSON or a JWT, often an HTML error page from a proxy in front of the provider. |
+| Provider shows "invalid redirect URI" with several URLs | OpenInvento sends `APP_URL` (or the first `APP_URLS` entry) + `/api/oidc/callback/`. Register that URI, or set `OIDC_REDIRECT_URI`. |
