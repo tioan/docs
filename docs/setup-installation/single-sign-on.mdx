@@ -59,7 +59,7 @@ OIDC_CLIENT_SECRET=your-client-secret   # leave empty for a public client
 OIDC_BUTTON_LABEL=Pocket ID             # optional: "Sign in with Pocket ID"
 ```
 
-Restart the container. The login page now shows a **Sign in with …** button.
+Apply the change with `docker compose up -d`, which recreates the container. A plain `docker compose restart` keeps the old environment. The login page now shows a **Sign in with …** button.
 
 :::warning Redirect URI
 The redirect URI is built from `APP_URL`, so it stays correct behind a reverse proxy that terminates TLS. If only `APP_URLS` is set, its **first** entry is used. If users reach OpenInvento under several URLs, register the one OpenInvento sends at the provider, or set `OIDC_REDIRECT_URI` to the full redirect URI you registered, for example `OIDC_REDIRECT_URI=https://inventory.example.com/api/oidc/callback/`. The path must stay `/api/oidc/callback/`. Without `APP_URL`, `APP_URLS` and `OIDC_REDIRECT_URI`, the redirect URI is derived from the incoming request, which is usually `http://` behind a proxy and is then rejected by the provider.
@@ -177,20 +177,13 @@ return {"email": request.user.email, "email_verified": True}
 Then replace `authentik default OAuth Mapping: OpenID 'email'` with it in the provider's **Advanced protocol settings** &rarr; **Scopes**. If users can change their own address in Authentik, keep the default mapping.
 :::
 
-The same setup as a [blueprint](https://docs.goauthentik.io/customize/blueprints/), including the scope mapping. In blueprints and API calls, set `grant_types` explicitly: since Authentik 2026.8 the list is empty if it is not set, and every login then fails with `Invalid grant_type for provider` in the Authentik log.
+The same setup as a [blueprint](https://docs.goauthentik.io/customize/blueprints/), with Authentik's default email mapping. In blueprints and API calls, set `grant_types` explicitly: since Authentik 2026.8 the list is empty if it is not set, and every login then fails with `Invalid grant_type for provider` in the Authentik log.
 
 ```yaml
 version: 1
 metadata:
   name: OpenInvento
 entries:
-  - model: authentik_providers_oauth2.scopemapping
-    id: scope-email-verified
-    identifiers: {name: "OpenInvento: email (verified)"}
-    attrs:
-      scope_name: email
-      expression: |
-        return {"email": request.user.email, "email_verified": True}
   - model: authentik_providers_oauth2.oauth2provider
     id: provider
     identifiers: {name: OpenInvento}
@@ -206,12 +199,26 @@ entries:
       signing_key: !Find [authentik_crypto.certificatekeypair, [name, authentik Self-signed Certificate]]
       property_mappings:
         - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-openid]]
-        - !KeyOf scope-email-verified
+        - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-email]]
         - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-profile]]
   - model: authentik_core.application
     identifiers: {slug: openinvento}
     attrs: {name: OpenInvento, provider: !KeyOf provider}
 ```
+
+Only if the addresses in Authentik are trustworthy (see the note above), add the verified mapping as a further entry before the provider:
+
+```yaml
+  - model: authentik_providers_oauth2.scopemapping
+    id: scope-email-verified
+    identifiers: {name: "OpenInvento: email (verified)"}
+    attrs:
+      scope_name: email
+      expression: |
+        return {"email": request.user.email, "email_verified": True}
+```
+
+and replace the `scope-email` line in the provider's `property_mappings` with `- !KeyOf scope-email-verified`.
 
 ### Dex
 
@@ -257,7 +264,7 @@ services:
       - ./ca.pem:/certs/ca.pem:ro
 ```
 
-3. Restart the container. If the file does not exist at that path, single sign-on stays disabled and the log says so at startup.
+3. Apply the change with `docker compose up -d` (a plain `docker compose restart` does not add the new mount or variable). If the file does not exist at that path, single sign-on stays disabled and the log says so at startup.
 
 Good to know:
 
