@@ -389,7 +389,7 @@ In all of these tests the providers used certificates from a private CA, trusted
 
 ## Limitations
 
-- **Access is checked at login only.** Disabling or deleting a user at the provider takes effect at their next login. Existing sessions (Django default: two weeks) and API keys keep working until then. To revoke access immediately, delete the user in **Instance Settings** &rarr; **Users** or revoke their API keys. Real-time deprovisioning would require SCIM, which is out of scope.
+- **Access is checked at login only.** Disabling or deleting a user at the provider takes effect at their next login. Existing sessions (Django default: two weeks) and API keys keep working until then. To revoke access immediately, delete the user in **Instance Settings** &rarr; **Users**: this ends their sessions at their next request and deletes their API keys. Revoking only their API keys leaves an open browser session working. Real-time deprovisioning would require SCIM, which is out of scope.
 - **One provider per instance.**
 - **Groups** are supported for inventory membership, allowed groups and the administrator group, see [Single Sign-On Groups](./single-sign-on-groups). There are no further roles.
 
