@@ -32,7 +32,7 @@ With i18n Ally:
 When adding or updating translations:
 
 1. **Use Nested JSON Keys**: Keep related strings grouped logically:
-   ```json title="locales/en/translation.json"
+   ```json title="frontend/src/locales/en.json"
    {
      "inventory": {
        "title": "Inventory Overview",
@@ -59,4 +59,4 @@ To contribute a new language to OpenInvento:
 4. Add the language to the language selector in `frontend/src/components/settings/UserSettings.tsx`: a `SelectItem` with the language code, and its name in `languageName`.
 5. Run `pnpm i18n:check` in `frontend/`. It checks every locale file against `en.json` for missing keys and placeholders.
 6. Verify your translations locally by starting the frontend development server and selecting the new language from your profile settings.
-6. Open a pull request on GitHub and remember to post the required CLA agreement comment!
+7. Open a pull request on GitHub and remember to post the required CLA agreement comment!

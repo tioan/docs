@@ -27,7 +27,7 @@ The full key is only displayed once upon creation. Store it securely in your sec
 
 ### Request Headers
 
-Include the API key in the `Authorization` header of every HTTP request:
+For the endpoints that accept API keys (all on this page except the CSV export and the PDF label sheet), include the key in the `Authorization` header of the request:
 
 ```http
 Authorization: Api-Key <YOUR_API_KEY>
@@ -228,7 +228,7 @@ DELETE /api/article-categories/{category_uuid}/
 
 ### 4. Category Fields
 
-Category fields define custom fields that can be used by articles. Use the list endpoint to retrieve field UUIDs for the `field_values` property when creating or updating articles.
+Category fields define custom fields that can be used by articles. Use the list endpoint to retrieve field UUIDs for the `field_values_input` property when creating or updating articles.
 
 #### List Category Fields
 ```http

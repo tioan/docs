@@ -87,10 +87,11 @@ python manage.py runserver
 `create_initial_admin` only creates the administrator while the database has no users, as in the container. You are asked to set a new password at the first login.
 
 ### Frontend (React & Vite)
-The frontend is located in `frontend/` and uses [pnpm](https://pnpm.io/) in the version pinned in `frontend/package.json` (`packageManager`). Recent npm versions refuse to run there, because `devEngines` requires pnpm. With Corepack, `corepack enable` installs the pinned version.
+The frontend is located in `frontend/` and uses [pnpm](https://pnpm.io/) in the version pinned in `frontend/package.json` (`packageManager`). Recent npm versions refuse to run there, because `devEngines` requires pnpm. Corepack (shipped with Node.js) provides it: `corepack enable` installs the `pnpm` command, which then runs the pinned version.
 
 ```bash
 cd frontend
+corepack enable
 pnpm install
 pnpm dev
 ```
