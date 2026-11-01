@@ -59,7 +59,17 @@ OIDC_CLIENT_SECRET=your-client-secret   # leave empty for a public client
 OIDC_BUTTON_LABEL=Pocket ID             # optional: "Sign in with Pocket ID"
 ```
 
-Apply the change with `docker compose up -d`, which recreates the container. A plain `docker compose restart` keeps the old environment. The login page now shows a **Sign in with …** button.
+Apply the change:
+
+- **Docker Compose:** run `docker compose up -d`, which recreates the container. A plain `docker compose restart` keeps the old environment.
+- **`docker run`:** remove the container and start it again with the [`docker run` command](./docker#method-2-manual-docker-run), now with the `OIDC_*` variables as `-e` options and the same `-v openinvento-data:/data` volume. The data stays in the volume.
+
+  ```bash
+  docker stop openinvento
+  docker rm openinvento
+  ```
+
+The login page now shows a **Sign in with …** button.
 
 :::warning Redirect URI
 The redirect URI is built from `APP_URL`, so it stays correct behind a reverse proxy that terminates TLS. If only `APP_URLS` is set, its **first** entry is used. If users reach OpenInvento under several URLs, register the one OpenInvento sends at the provider, or set `OIDC_REDIRECT_URI` to the full redirect URI you registered, for example `OIDC_REDIRECT_URI=https://inventory.example.com/api/oidc/callback/`. The path must stay `/api/oidc/callback/`. Without `APP_URL`, `APP_URLS` and `OIDC_REDIRECT_URI`, the redirect URI is derived from the incoming request, which is usually `http://` behind a proxy and is then rejected by the provider.
@@ -264,7 +274,7 @@ services:
       - ./ca.pem:/certs/ca.pem:ro
 ```
 
-3. Apply the change with `docker compose up -d` (a plain `docker compose restart` does not add the new mount or variable). If the file does not exist at that path, single sign-on stays disabled and the log says so at startup.
+3. Apply the change with `docker compose up -d` (a plain `docker compose restart` does not add the new mount or variable). With `docker run`, remove the container (`docker stop openinvento`, `docker rm openinvento`) and start it again with two more options: `-e OIDC_CA_BUNDLE=/certs/ca.pem -v "$PWD/ca.pem:/certs/ca.pem:ro"`. If the file does not exist at that path, single sign-on stays disabled and the log says so at startup.
 
 Good to know:
 
