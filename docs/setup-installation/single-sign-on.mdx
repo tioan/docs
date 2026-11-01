@@ -71,7 +71,8 @@ Apply the change:
 
 The login page now shows a **Sign in with …** button.
 
-:::warning Redirect URI
+:::warning 
+Redirect URI
 The redirect URI is built from `APP_URL`, so it stays correct behind a reverse proxy that terminates TLS. If only `APP_URLS` is set, its **first** entry is used. If users reach OpenInvento under several URLs, register the one OpenInvento sends at the provider, or set `OIDC_REDIRECT_URI` to the full redirect URI you registered, for example `OIDC_REDIRECT_URI=https://inventory.example.com/api/oidc/callback/`. The path must stay `/api/oidc/callback/`. Single sign-on always runs on the host of this redirect URI: a login started under another `APP_URL`/`APP_URLS` host is first sent to that host, and the user is logged in there afterwards. This is needed because the pending login is stored in a cookie of the host it starts on. Without `APP_URL`, `APP_URLS` and `OIDC_REDIRECT_URI`, the redirect URI is derived from the incoming request, which is usually `http://` behind a proxy and is then rejected by the provider.
 :::
 
@@ -283,7 +284,8 @@ Good to know:
 - The host name in the issuer URL must appear in the provider certificate (subject alternative name), as with any https connection.
 - Instead of a file, `OIDC_CA_BUNDLE` can point to a directory of certificates prepared with `openssl rehash`.
 
-:::danger OIDC_SKIP_SSL_VERIFICATION
+:::danger 
+OIDC_SKIP_SSL_VERIFICATION
 `OIDC_SKIP_SSL_VERIFICATION=true` turns off the certificate check for all requests to the provider. Then anyone who can intercept the connection between OpenInvento and the provider (another device on the network, a compromised router, a spoofed DNS answer) can read the client secret and the authorization codes, and can answer with their own discovery document, keys and ID tokens. That lets them **log in as any user, including administrators**. Use it at most for a short test, and use `OIDC_CA_BUNDLE` instead. OpenInvento logs a warning at every start while it is set. Setting both options disables single sign-on.
 :::
 
@@ -314,7 +316,8 @@ The email address is not stored if the provider explicitly marks it as unverifie
 
 Accounts created by single sign-on have **no local password**. The password fields in **Settings** &rarr; **Personal account** are replaced by a notice, and the API rejects setting a password for these accounts. Accounts are never made instance administrators by the provider; an existing administrator can promote them in **Instance Settings** &rarr; **Users**.
 
-:::danger Linking existing accounts by email
+:::danger 
+Linking existing accounts by email
 `OIDC_LINK_EXISTING_BY_EMAIL=true` lets whoever controls an email address at the provider take over the OpenInvento account with that address. Only enable it if your provider verifies email addresses and users cannot change them freely, for example to migrate existing local accounts once. Linking only happens if the provider sends `email_verified: true` and the account is not linked yet.
 :::
 
