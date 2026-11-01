@@ -72,7 +72,7 @@ Apply the change:
 The login page now shows a **Sign in with …** button.
 
 :::warning Redirect URI
-The redirect URI is built from `APP_URL`, so it stays correct behind a reverse proxy that terminates TLS. If only `APP_URLS` is set, its **first** entry is used. If users reach OpenInvento under several URLs, register the one OpenInvento sends at the provider, or set `OIDC_REDIRECT_URI` to the full redirect URI you registered, for example `OIDC_REDIRECT_URI=https://inventory.example.com/api/oidc/callback/`. The path must stay `/api/oidc/callback/`. Without `APP_URL`, `APP_URLS` and `OIDC_REDIRECT_URI`, the redirect URI is derived from the incoming request, which is usually `http://` behind a proxy and is then rejected by the provider.
+The redirect URI is built from `APP_URL`, so it stays correct behind a reverse proxy that terminates TLS. If only `APP_URLS` is set, its **first** entry is used. If users reach OpenInvento under several URLs, register the one OpenInvento sends at the provider, or set `OIDC_REDIRECT_URI` to the full redirect URI you registered, for example `OIDC_REDIRECT_URI=https://inventory.example.com/api/oidc/callback/`. The path must stay `/api/oidc/callback/`. Single sign-on always runs on the host of this redirect URI: a login started under another `APP_URL`/`APP_URLS` host is first sent to that host, and the user is logged in there afterwards. This is needed because the pending login is stored in a cookie of the host it starts on. Without `APP_URL`, `APP_URLS` and `OIDC_REDIRECT_URI`, the redirect URI is derived from the incoming request, which is usually `http://` behind a proxy and is then rejected by the provider.
 :::
 
 ### Environment Variables

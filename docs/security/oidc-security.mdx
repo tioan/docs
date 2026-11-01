@@ -21,7 +21,7 @@ Requirements that only concern the identity provider are listed as "not applicab
 
 ## How it was verified
 
-**Unit tests.** `backend/account_auth/tests_oidc.py` (128 test methods; 175 tests in the whole backend, all passing) runs the full login flow against a fake provider that signs real RS256 tokens. Every covered check in the table below has at least one automated test, the conformance suite or the provider matrix as evidence, including the checks that live in mozilla-django-oidc or PyJWT, so a library upgrade that drops one of them shows up as a failing test. Three checks are only backed by code review, as their evidence column says: SE-02 (no automatic redirect after logout), S16-04 (the access token is neither stored nor logged) and BCP-2.4 (no password grant). `oidc.py` has full branch coverage. The evidence column lists test method names.
+**Unit tests.** `backend/account_auth/tests_oidc.py` (135 test methods; 182 tests in the whole backend, all passing) runs the full login flow against a fake provider that signs real RS256 tokens. Every covered check in the table below has at least one automated test, the conformance suite or the provider matrix as evidence, including the checks that live in mozilla-django-oidc or PyJWT, so a library upgrade that drops one of them shows up as a failing test. Three checks are only backed by code review, as their evidence column says: SE-02 (no automatic redirect after logout), S16-04 (the access token is neither stored nor logged) and BCP-2.4 (no password grant). `oidc.py` has full branch coverage. The evidence column lists test method names.
 
 **OpenID Foundation conformance suite.** The RP was run against the [OpenID Foundation conformance suite](https://openid.net/certification/) with the plans `oidcc-client-basic-certification-test-plan` (14 modules) and `oidcc-client-config-certification-test-plan` (6 modules), static client, `client_secret_basic`:
 
@@ -72,6 +72,7 @@ Status values: **covered** (implemented and tested), **not applicable** (feature
 | AR-08 | PKCE method S256, never `plain` (RFC 7636 4.2, RFC 9700 2.1.1) | covered | Library default S256, not configurable through the environment | `test_redirects_to_discovered_endpoint_with_pkce_state_and_nonce`; docker |
 | AR-09 | PKCE and nonce are fresh per request (RFC 9700 2.1.1) | covered | New values for every login, kept per state in the session | `test_redirects_to_discovered_endpoint_with_pkce_state_and_nonce`, `test_state_cannot_be_replayed` |
 | AR-10 | Make sure the provider supports PKCE (RFC 9700 4.7.1) | covered | `get_endpoints` refuses a public client when discovery lists `code_challenge_methods_supported` without S256 (best effort: providers that omit the field, or explicit endpoints, are not checked) | `test_public_client_rejects_provider_without_s256`; docker: code injection refused by PKCE |
+| AR-11 | The callback arrives on the host whose session holds the state | covered | `get_canonical_login_url`: a login started on another `APP_URL`/`APP_URLS` host is sent to the host of the redirect URI before state, nonce and verifier are created; hosts outside `APP_URL`/`APP_URLS` are not redirected, so a proxy that rewrites the Host header cannot loop | `test_login_on_other_app_host_moves_to_callback_host_first`, `test_login_on_callback_host_goes_to_provider`, `test_other_port_on_callback_host_is_not_redirected`, `test_host_outside_app_urls_is_not_redirected`, `test_explicit_redirect_uri_sets_the_login_host`; docker (second `APP_URLS` origin) |
 
 ### Authentication response
 
@@ -144,14 +145,14 @@ Status values: **covered** (implemented and tested), **not applicable** (feature
 | ID | Requirement (source §) | Status | How it is handled | Evidence |
 |---|---|---|---|---|
 | SE-01 | New session key and CSRF token at login (RFC 9700 4.5.3.2) | covered | Django `login` cycles both | `test_login_cycles_session_key` |
-| SE-02 | Logout is not undone by an automatic redirect | covered | The frontend goes to `/auth/login?logged_out=1`, where the login form skips auto-redirect | code review of `login-form.tsx`; no automated test |
+| SE-02 | Logout is not undone by an automatic redirect | covered | The frontend goes to `/auth/login?logged_out=1`, where the login form skips auto-redirect; a login-config response that arrives after the form is gone (e.g. after a local login) is ignored | code review of `login-form.tsx`; no automated test |
 
 ### Discovery (Discovery 4.3)
 
 | ID | Requirement (source §) | Status | How it is handled | Evidence |
 |---|---|---|---|---|
 | DI-01 | Discovered issuer equals the configured issuer | covered | `get_provider_metadata` | `test_discovery_issuer_mismatch_fails_without_server_error`; suite: `discovery-issuer-mismatch` |
-| DI-02 | An invalid document is not used or cached | covered | Checked before it is cached | `test_invalid_discovery_document_is_not_cached`, `test_discovery_without_required_endpoint_fails` |
+| DI-02 | An invalid document is not used or cached | covered | Checked before it is cached; a document that is not a JSON object is rejected | `test_invalid_discovery_document_is_not_cached`, `test_discovery_without_required_endpoint_fails`, `test_non_object_discovery_document_fails_without_server_error` |
 | DI-03 | ID token `iss` equals the discovered issuer | covered | Both compared to `OIDC_ISSUER` | `test_wrong_issuer_is_rejected` |
 | DI-04 | Use provider metadata (RFC 9700 2.6) | covered | Discovery cached for one hour; explicit endpoints skip it | `test_discovery_document_is_cached`, `test_explicit_endpoints_skip_discovery`, `test_unreachable_provider_fails_without_server_error`; suite: `discovery-openid-config` |
 

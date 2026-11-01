@@ -49,7 +49,7 @@ OpenInvento uses `APP_URL` and `APP_URLS` to automatically configure two critica
   APP_URLS=http://192.168.1.100:8080,https://inventory.local
   ```
 - **Origin Only**: Do not include subpaths in `APP_URL`. Supply the site origin only.
-- **Only `APP_URLS`**: If `APP_URL` is empty, the first entry of `APP_URLS` is used as `APP_URL`, for example for the single sign-on redirect URI.
+- **Only `APP_URLS`**: If `APP_URL` is empty, the first entry of `APP_URLS` is used as `APP_URL`, for example for the single sign-on redirect URI. Single sign-on started under another entry moves to that host first, so users end up logged in there.
 
 ---
 
