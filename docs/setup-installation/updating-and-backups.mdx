@@ -50,7 +50,7 @@ When OpenInvento starts, it automatically applies any pending database migration
    docker pull ghcr.io/openinvento/openinvento:latest
    ```
 
-3. Re-run your `docker run` command with the same volume and environment options:
+3. Run the container again with **the same** volume and environment options as before, for example the `-e` options from the [installation](./docker#method-2-manual-docker-run). Keep the same `SECRET_KEY`. If you keep the variables in a file, `--env-file .env` replaces the `-e` options:
    ```bash
    docker run -d \
      --name openinvento \
@@ -85,16 +85,25 @@ The instance backup endpoint is restricted strictly to instance administrators b
 
 ### 2. Manual Volume Backup (Host-Level)
 
-You can also back up the Docker volume directly from the host filesystem or via a temporary helper container:
+You can also back up the Docker volume with a temporary helper container. Two things matter:
+
+- **The volume name.** Docker Compose prefixes volumes with the project name, which is the name of the directory with `docker-compose.yml`. With the [installation guide](./docker), the volume is called `openinvento_openinvento-data`; with the manual `docker run` installation, it is `openinvento-data`. Check with `docker volume ls`. A wrong name silently creates a new, empty volume, and the backup contains nothing.
+- **Stop OpenInvento first.** The database is a SQLite file. Copying it while OpenInvento writes to it can produce a broken copy.
 
 ```bash
+docker compose stop        # or: docker stop openinvento
 docker run --rm \
-  -v openinvento-data:/volume-data \
-  -v $(pwd):/backup \
+  -v openinvento_openinvento-data:/volume-data \
+  -v "$(pwd)":/backup \
   alpine tar -czvf /backup/openinvento-backup-$(date +%Y%m%d).tar.gz -C /volume-data .
+docker compose start       # or: docker start openinvento
 ```
 
 This creates a timestamped compressed `.tar.gz` archive of your entire data volume in your current directory.
+
+:::caution Keep the SECRET_KEY with your backups
+The archive contains the data directory, but not your `.env`. Third-party provider API keys are encrypted with the `SECRET_KEY` (see [Secret Key](../security/secret-key)). Store your `.env` (or at least the `SECRET_KEY`) securely next to the backups, and use the same key when you restore, otherwise these API keys cannot be decrypted.
+:::
 
 ---
 
@@ -122,10 +131,11 @@ To restore data from a previous volume backup archive:
 2. Restore the files into the data volume:
    ```bash
    docker run --rm \
-     -v openinvento-data:/volume-data \
-     -v $(pwd):/backup \
+     -v openinvento_openinvento-data:/volume-data \
+     -v "$(pwd)":/backup \
      alpine sh -c "rm -rf /volume-data/* && tar -xzvf /backup/openinvento-backup-YYYYMMDD.tar.gz -C /volume-data"
    ```
+   Use the same volume name as for the backup (`openinvento-data` for the manual `docker run` installation).
 
 3. Restart the container:
    ```bash
