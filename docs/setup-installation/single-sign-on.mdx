@@ -62,7 +62,7 @@ OIDC_BUTTON_LABEL=Pocket ID             # optional: "Sign in with Pocket ID"
 Apply the change:
 
 - **Docker Compose:** run `docker compose up -d`, which recreates the container. A plain `docker compose restart` keeps the old environment.
-- **`docker run`:** remove the container and start it again with the [`docker run` command](./docker#method-2-manual-docker-run), now with the `OIDC_*` variables as `-e` options and the same `-v openinvento-data:/data` volume. The data stays in the volume.
+- **`docker run`:** remove the container and start it again with the same options as before (see the [`docker run` command](./docker#method-2-manual-docker-run)), plus the `OIDC_*` variables as `-e` options. Keep your existing `/data` mount exactly as it was, whether it is a named volume or a host directory; a different mount starts with an empty database. `APP_URL` must be the URL users open in the browser (not the `http://localhost:8080` of the example, unless that is how you reach OpenInvento), because the redirect URI is built from it and must match the one registered at the provider. Alternatively, set `OIDC_REDIRECT_URI`.
 
   ```bash
   docker stop openinvento
@@ -73,7 +73,7 @@ The login page now shows a **Sign in with …** button.
 
 :::warning 
 Redirect URI
-The redirect URI is built from `APP_URL`, so it stays correct behind a reverse proxy that terminates TLS. If only `APP_URLS` is set, its **first** entry is used. If users reach OpenInvento under several URLs, register the one OpenInvento sends at the provider, or set `OIDC_REDIRECT_URI` to the full redirect URI you registered, for example `OIDC_REDIRECT_URI=https://inventory.example.com/api/oidc/callback/`. The path must stay `/api/oidc/callback/`. Single sign-on always runs on the host of this redirect URI: a login started under another `APP_URL`/`APP_URLS` host is first sent to that host, and the user is logged in there afterwards. This is needed because the pending login is stored in a cookie of the host it starts on. Without `APP_URL`, `APP_URLS` and `OIDC_REDIRECT_URI`, the redirect URI is derived from the incoming request, which is usually `http://` behind a proxy and is then rejected by the provider.
+The redirect URI is built from `APP_URL`, so it stays correct behind a reverse proxy that terminates TLS. If only `APP_URLS` is set, its **first** entry is used. If users reach OpenInvento under several URLs, register the one OpenInvento sends at the provider, or set `OIDC_REDIRECT_URI` to the full redirect URI you registered, for example `OIDC_REDIRECT_URI=https://inventory.example.com/api/oidc/callback/`. The path must stay `/api/oidc/callback/`. Single sign-on always runs on the host of this redirect URI: a login started under another `APP_URL`/`APP_URLS` host is first sent to that host, and the user is logged in there afterwards. This is needed because the pending login (state, nonce, PKCE verifier) is stored in the session of the host it is created on, and the provider sends the browser back to the redirect URI. So the login moves to that host before the pending login is created. Without `APP_URL`, `APP_URLS` and `OIDC_REDIRECT_URI`, the redirect URI is derived from the incoming request, which is usually `http://` behind a proxy and is then rejected by the provider.
 :::
 
 ### Environment Variables
@@ -275,7 +275,7 @@ services:
       - ./ca.pem:/certs/ca.pem:ro
 ```
 
-3. Apply the change with `docker compose up -d` (a plain `docker compose restart` does not add the new mount or variable). With `docker run`, remove the container (`docker stop openinvento`, `docker rm openinvento`) and start it again with two more options: `-e OIDC_CA_BUNDLE=/certs/ca.pem -v "$PWD/ca.pem:/certs/ca.pem:ro"`. If the file does not exist at that path, single sign-on stays disabled and the log says so at startup.
+3. Make sure `ca.pem` exists before you start the container: if the source of a bind mount is missing, Docker creates an empty directory in its place, and the certificate check fails at login. Then apply the change with `docker compose up -d` (a plain `docker compose restart` does not add the new mount or variable). With `docker run`, remove the container (`docker stop openinvento`, `docker rm openinvento`) and start it again with two more options: `-e OIDC_CA_BUNDLE=/certs/ca.pem --mount type=bind,source="$PWD/ca.pem",target=/certs/ca.pem,readonly`. Unlike `-v`, `--mount` refuses to start the container if the file is missing. If `OIDC_CA_BUNDLE` points to a path that does not exist inside the container, single sign-on stays disabled and the log says so at startup.
 
 Good to know:
 
